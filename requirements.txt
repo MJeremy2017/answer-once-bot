@@ -1,0 +1,14 @@
+# Web server
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# Lark
+lark-oapi>=1.2.0
+
+# Embeddings and vector store
+sentence-transformers>=2.2.0
+chromadb>=0.4.0
+
+# Config and async
+python-dotenv>=1.0.0
+httpx>=0.26.0

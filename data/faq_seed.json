@@ -1,0 +1,11 @@
+[
+  {
+    "question": "How do we request production access?",
+    "answer": "Production access requests go through Jira → SEC-12, approval by DevOps.",
+    "answerer_name": "Alice (Platform Lead)",
+    "date": "2025-01-12",
+    "chat_id": "seed",
+    "root_message_id": "seed_1",
+    "thread_id": "seed_1"
+  }
+]
