@@ -3,6 +3,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+import uuid
 
 from .config import CHROMA_PERSIST_DIR, SIMILARITY_THRESHOLD
 from . import embeddings
@@ -42,6 +43,14 @@ def _get_collection():
     return _collection
 
 
+def has_qa_for_root(root_message_id: str) -> bool:
+    """Return True if we already have a Q&A record for this thread root."""
+    if not root_message_id:
+        return False
+    coll = _get_collection()
+    result = coll.get(where={"root_message_id": root_message_id}, limit=1)
+    return bool(result and result.get("ids"))
+
 def add_qa(
     question_text: str,
     answer_text: str,
@@ -55,7 +64,6 @@ def add_qa(
     coll = _get_collection()
     vec = embeddings.embed(question_text)
     # Chroma expects list of embeddings and list of metadatas; ids must be unique
-    import uuid
     id_ = str(uuid.uuid4())
     coll.add(
         ids=[id_],

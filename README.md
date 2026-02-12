@@ -18,13 +18,31 @@ A Lark bot that detects when someone asks a question that was already answered i
 - **Event subscription:** Subscribe to `im.message.receive_v1`. Set **Request URL** to your webhook (e.g. `https://your-host/webhook/lark`). Do not enable encryption (Encrypt Key empty).
 - **URL verification:** When you save the Request URL, Lark sends a `url_verification` event; the server responds with the challenge and passes verification.
 
-### 2. Lark message events
+### 2. Permissions and behavior
 
-With permission "Obtain group messages mentioning the bot", Lark may only send message events when the bot is **@mentioned**. Try asking your question while @mentioning the bot, e.g.:
+**Current permissions (typical):**
+- *Read and send messages in private and group chats*
+- *Obtain group messages mentioning the bot*
 
-> @AnsweredOnceBot How do we request production access?
+With only these, Lark sends events **only when the bot is @mentioned**. So:
+- The bot can **answer** when someone posts a question and @mentions the bot.
+- The bot **cannot** record Q&A from other threads, because it never receives reply events where it isn’t mentioned.
 
-To receive **all** messages in a group (without @mention), add the permission "Obtain group chat messages" or similar in the Lark app settings, if available for your app type.
+**To record Q&A from all threads (recommended):**
+
+1. In **Lark Developer Console** → your app → **Permissions**, add (if available for your app type):
+   - **Obtain group chat messages** or **Receive all messages in group chats** (name may vary).
+   This lets the bot receive every message in the group, including replies that don’t @mention it.
+
+2. Set **`LARK_BOT_OPEN_ID`** in `.env` to your bot’s open_id, so the bot **only answers when @mentioned** but still processes all messages for indexing:
+   - Send a test message that @mentions the bot and inspect the webhook event (or logs): `event.message.mentions[].id.open_id` for the bot is your `LARK_BOT_OPEN_ID`.
+   - Or use the Lark API to get the bot’s open_id for the app.
+
+3. Restart the bot. Result:
+   - **Root message that @mentions the bot** → bot tries to answer (from DB or “don’t know”).
+   - **Any reply in a thread** → bot may store that thread as Q&A (if root is a question and not already stored).
+
+If you do **not** add “all group messages” and keep only “Obtain group messages mentioning the bot”, leave **`LARK_BOT_OPEN_ID`** empty. Then every event you receive is treated as “bot was mentioned” and the bot will answer when it’s a question; it still won’t receive other replies, so it can’t auto-record those Q&As.
 
 ### 3. Environment
 
@@ -32,6 +50,9 @@ Copy `.env.example` to `.env` and set:
 
 - `LARK_APP_ID`, `LARK_APP_SECRET` (use quotes if the value has special characters: `LARK_APP_SECRET="your-secret"`)
 - `LARK_BASE_URL`: `https://open.larksuite.com` (Lark) or `https://open.feishu.cn` (Feishu)
+- Optional: `LARK_BOT_OPEN_ID`: bot’s open_id when using “all group messages” permission (so the bot only answers when @mentioned)
+- **How to get `LARK_BOT_OPEN_ID`:** In the group, send a message that @mentions the bot. The server will log:  
+  `LARK_BOT_OPEN_ID not set. From this @mention, candidate open_ids: ['ou_xxxx']` — use that `ou_xxxx` (if you @mentioned only the bot, it's the single value). Or inspect the webhook body: `event.message.mentions[].id.open_id` for the bot.
 - `SIMILARITY_THRESHOLD`: e.g. `0.78` (tune to avoid false positives/negatives)
 - Optional: `ANSWERED_ONCE_CHAT_IDS`: comma-separated chat IDs to limit indexing/matching to those channels
 

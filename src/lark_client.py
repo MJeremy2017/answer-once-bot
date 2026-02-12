@@ -4,6 +4,7 @@ import lark_oapi as lark
 from lark_oapi.api.im.v1 import (
     CreateMessageRequest,
     CreateMessageRequestBody,
+    GetMessageRequest,
     ListMessageRequest,
     ReplyMessageRequest,
     ReplyMessageRequestBody,
@@ -144,6 +145,35 @@ def list_messages(
         if not page_token or len(items) < page_size:
             break
     return out
+
+
+def get_message(message_id: str) -> dict | None:
+    """Fetch a message by ID. Returns dict with content, create_time, sender_id, chat_id, or None on failure."""
+    try:
+        request = GetMessageRequest.builder().message_id(message_id).build()
+        response = get_client().im.v1.message.get(request)
+        if not response.success() or not response.data:
+            return None
+        # Response may have data as message or data.items[0]
+        msg = response.data
+        if hasattr(msg, "items") and msg.items:
+            msg = msg.items[0]
+        content = getattr(getattr(msg, "body", None), "content", None) or ""
+        create_time = getattr(msg, "create_time", None)
+        sender = getattr(msg, "sender", None)
+        sender_id = ""
+        if sender:
+            sender_id = getattr(sender, "open_id", None) or getattr(sender, "id", None) or ""
+        chat_id = getattr(msg, "chat_id", None) or ""
+        return {
+            "content": content,
+            "create_time": create_time,
+            "sender_id": sender_id,
+            "chat_id": chat_id,
+        }
+    except Exception as e:
+        logger.exception("Get message error: %s", e)
+        return None
 
 
 def build_thread_link(chat_id: str, message_id: str) -> str:

@@ -24,6 +24,9 @@ def _float(value: str | None, default: float) -> float:
 LARK_APP_ID = _str(os.getenv("LARK_APP_ID"))
 LARK_APP_SECRET = _str(os.getenv("LARK_APP_SECRET"))
 LARK_BASE_URL = _str(os.getenv("LARK_BASE_URL")) or "https://open.larksuite.com"
+# When set: only answer when the message @mentions the bot (use with "all messages" permission).
+# Get it from a message event where the bot is mentioned: message.mentions[].id.open_id for the bot.
+LARK_BOT_OPEN_ID = _str(os.getenv("LARK_BOT_OPEN_ID"))
 
 # Optional: limit to specific chats (comma-separated)
 _chat_ids = _str(os.getenv("ANSWERED_ONCE_CHAT_IDS"))
