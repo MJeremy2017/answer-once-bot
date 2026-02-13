@@ -11,16 +11,12 @@ from lark_oapi.api.im.v1 import (
 )
 from lark_oapi.core.const import FEISHU_DOMAIN, LARK_DOMAIN
 
-from .config import (
-    LARK_APP_ID,
-    LARK_APP_SECRET,
-    LARK_BASE_URL,
-)
+from .config import LARK_APP_ID, LARK_APP_SECRET, LARK_BASE_URL
 
 logger = logging.getLogger(__name__)
 
+
 def _domain() -> str:
-    """Return Lark API base URL (from lark_oapi.core.const)."""
     if "feishu.cn" in LARK_BASE_URL:
         return FEISHU_DOMAIN
     return LARK_DOMAIN
@@ -48,34 +44,32 @@ def send_text_message(
     text: str,
     *,
     root_id: str | None = None,
+    post_content: dict | None = None,
 ) -> str | None:
-    """Send a text message to a chat. If root_id is set, reply in that message's thread.
-    Returns message_id on success, None on failure.
-    """
-    content = lark.JSON.marshal({"text": text})
+    """Send a text or post message. If post_content is set, sends rich post with @mention/link."""
+    if post_content is not None:
+        content = lark.JSON.marshal(post_content)
+        msg_type = "post"
+    else:
+        content = lark.JSON.marshal({"text": text})
+        msg_type = "text"
     client = get_client()
     try:
         if root_id:
-            # Use Reply Message API to reply in thread (CreateMessageRequestBody has no root_id in this SDK)
             body = (
                 ReplyMessageRequestBody.builder()
                 .content(content)
-                .msg_type("text")
+                .msg_type(msg_type)
                 .reply_in_thread(True)
                 .build()
             )
-            request = (
-                ReplyMessageRequest.builder()
-                .message_id(root_id)
-                .request_body(body)
-                .build()
-            )
+            request = ReplyMessageRequest.builder().message_id(root_id).request_body(body).build()
             response = client.im.v1.message.reply(request)
         else:
             body_builder = (
                 CreateMessageRequestBody.builder()
                 .receive_id(chat_id)
-                .msg_type("text")
+                .msg_type(msg_type)
                 .content(content)
             )
             request = (
@@ -89,11 +83,7 @@ def send_text_message(
             else:
                 response = client.im.v1.chat.create(request)
         if not response.success():
-            logger.error(
-                "Lark send message failed: code=%s msg=%s",
-                response.code,
-                response.msg,
-            )
+            logger.error("Lark send message failed: code=%s msg=%s", response.code, response.msg)
             return None
         return response.data.message_id
     except Exception as e:
@@ -101,12 +91,8 @@ def send_text_message(
         return None
 
 
-def list_messages(
-    chat_id: str,
-    *,
-    page_size: int = 50,
-) -> list[dict]:
-    """List messages in a chat (paginated). Returns list of message dicts."""
+def list_messages(chat_id: str, *, page_size: int = 50) -> list[dict]:
+    """List messages in a chat (paginated)."""
     out: list[dict] = []
     page_token: str | None = None
     while True:
@@ -148,36 +134,30 @@ def list_messages(
 
 
 def get_message(message_id: str) -> dict | None:
-    """Fetch a message by ID. Returns dict with content, create_time, sender_id, chat_id, or None on failure."""
+    """Fetch a message by ID. Returns dict with content, create_time, sender_id, chat_id, or None."""
     try:
         request = GetMessageRequest.builder().message_id(message_id).build()
         response = get_client().im.v1.message.get(request)
         if not response.success() or not response.data:
             return None
-        # Response may have data as message or data.items[0]
         msg = response.data
         if hasattr(msg, "items") and msg.items:
             msg = msg.items[0]
         content = getattr(getattr(msg, "body", None), "content", None) or ""
         create_time = getattr(msg, "create_time", None)
         sender = getattr(msg, "sender", None)
-        sender_id = ""
-        if sender:
-            sender_id = getattr(sender, "open_id", None) or getattr(sender, "id", None) or ""
+        sender_id = getattr(sender, "open_id", None) or getattr(sender, "id", None) or "" if sender else ""
         chat_id = getattr(msg, "chat_id", None) or ""
-        return {
-            "content": content,
-            "create_time": create_time,
-            "sender_id": sender_id,
-            "chat_id": chat_id,
-        }
+        return {"content": content, "create_time": create_time, "sender_id": sender_id, "chat_id": chat_id}
     except Exception as e:
         logger.exception("Get message error: %s", e)
         return None
 
 
 def build_thread_link(chat_id: str, message_id: str) -> str:
-    """Build a link to open the thread in Lark. Format may vary by tenant."""
-    base = LARK_BASE_URL.replace("open.", "").rstrip("/")
-    # Common pattern: messenger link to chat and message
-    return f"{base}/messenger/thread/{chat_id}-{message_id}"
+    """Build an applink to open the thread in Lark/Feishu client."""
+    if "feishu.cn" in LARK_BASE_URL:
+        base = "https://open.feishu.cn"
+    else:
+        base = "https://open.larksuite.com"
+    return f"{base}/applink/open/messenger?chatId={chat_id}&messageId={message_id}"

@@ -1,6 +1,7 @@
 """FastAPI app: Lark webhook endpoint (URL verification + message receive)."""
 import json
 import logging
+import re
 
 from fastapi import BackgroundTasks, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -12,6 +13,19 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Answered-Once Bot", version="0.1.0")
+
+# Lark @mention in text: <at user_id="ou_xxx">name</at> or @_user_1 placeholder
+_AT_TAG_RE = re.compile(r"<at[^>]*>.*?</at>", re.IGNORECASE | re.DOTALL)
+_AT_PLACEHOLDER_RE = re.compile(r"@_user_\d+\s*", re.IGNORECASE)
+
+
+def _strip_mentions(text: str) -> str:
+    """Remove Lark @mention tags/placeholders so query matches stored questions."""
+    if not text:
+        return text
+    t = _AT_TAG_RE.sub(" ", text)
+    t = _AT_PLACEHOLDER_RE.sub(" ", t)
+    return " ".join(t.split()).strip()
 
 
 def _message_mentions_bot(mentions: list) -> bool:
@@ -29,10 +43,11 @@ def _message_mentions_bot(mentions: list) -> bool:
 
 
 def _parse_message_content(content: str) -> str:
-    """Extract plain text from Lark message content JSON."""
+    """Extract plain text from Lark message content JSON, stripping @mention tags."""
     try:
         data = json.loads(content)
-        return (data.get("text") or "").strip()
+        raw = (data.get("text") or "").strip()
+        return _strip_mentions(raw)
     except (json.JSONDecodeError, TypeError):
         return ""
 
@@ -169,7 +184,7 @@ def _run_index_reply(
     reply_create_time: str,
 ) -> None:
     try:
-        pipeline.try_index_reply(
+        pipeline.index_reply(
             chat_id=chat_id,
             root_id=root_id,
             reply_message_id=reply_message_id,

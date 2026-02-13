@@ -1,4 +1,5 @@
 """Pipeline: question check -> embed -> match -> format -> send; and index Q&A from replies."""
+import json
 import logging
 from datetime import datetime
 
@@ -35,51 +36,59 @@ def handle_message(
     if match:
         thread_link = lark_client.build_thread_link(match.chat_id, match.root_message_id)
         summary = _truncate_summary(match.answer_text, max_chars=500)
+        post_content = formatter.build_post_content(
+            answer_time=match.answer_time,
+            answer_summary=summary,
+            thread_link=thread_link,
+            answerer_open_id=match.answerer_open_id,
+        )
         reply_text = formatter.format_reply(
             answerer_name=match.answerer_name,
             answer_time=match.answer_time,
             answer_summary=summary,
             thread_link=thread_link,
         )
+        sent_id = lark_client.send_text_message(
+            chat_id,
+            reply_text,
+            root_id=message_id,
+            post_content=post_content,
+        )
     else:
         reply_text = DONT_KNOW_REPLY
-    sent_id = lark_client.send_text_message(
-        chat_id,
-        reply_text,
-        root_id=message_id,
-    )
+        sent_id = lark_client.send_text_message(chat_id, reply_text, root_id=message_id)
     if sent_id:
         logger.info("Replied to message_id=%s sent_id=%s", message_id, sent_id)
     else:
         logger.warning("Failed to send reply for message_id=%s", message_id)
 
 
-def try_index_reply(
+def index_reply(
     chat_id: str,
     root_id: str,
     reply_message_id: str,
     reply_content: str,
     reply_sender_id: str,
-    reply_create_time: str | int,
+    reply_create_time: str,
 ) -> None:
     """When a reply is posted, if the root is a question and not yet indexed, add Q&A to the store."""
-    if not root_id or not reply_content or not reply_content.strip():
-        logger.info("try_index_reply: skip (no root_id or empty reply) root_id=%s", root_id)
+    if not root_id or not reply_content:
+        logger.info("index_reply: skip (no root_id or empty reply) root_id=%s", root_id)
         return
     if store.has_qa_for_root(root_id):
-        logger.info("try_index_reply: skip (already has Q&A for root) root_id=%s", root_id)
+        logger.info("index_reply: skip (already has Q&A for root) root_id=%s", root_id)
         return
     root_msg = lark_client.get_message(root_id)
     if not root_msg:
-        logger.warning("try_index_reply: skip (could not fetch root message) root_id=%s", root_id)
+        logger.warning("index_reply: skip (could not fetch root message) root_id=%s", root_id)
         return
     question_text = _parse_content(root_msg.get("content") or "{}")
     if not question_detector.is_question(question_text):
-        logger.info("try_index_reply: skip (root is not a question) root_id=%s text=%r", root_id, question_text[:50])
+        logger.info("index_reply: skip (root is not a question) root_id=%s text=%r", root_id, question_text[:50])
         return
     answer_text = _parse_content(reply_content)
     if not answer_text.strip():
-        logger.info("try_index_reply: skip (reply has no text) root_id=%s", root_id)
+        logger.info("index_reply: skip (reply has no text) root_id=%s", root_id)
         return
     try:
         ts = datetime.utcfromtimestamp(int(reply_create_time) / 1000)
@@ -94,13 +103,12 @@ def try_index_reply(
         chat_id=chat_id,
         root_message_id=root_id,
         thread_id=root_id,
+        answerer_open_id=reply_sender_id or None,
     )
     logger.info("Indexed Q&A for root_id=%s", root_id)
 
 
 def _parse_content(content: str) -> str:
-    """Extract plain text from Lark message content JSON."""
-    import json
     try:
         data = json.loads(content) if isinstance(content, str) else {}
         return (data.get("text") or "").strip()
@@ -109,7 +117,6 @@ def _parse_content(content: str) -> str:
 
 
 def _truncate_summary(text: str, max_chars: int = 500) -> str:
-    """Truncate answer for summary, one line preferred."""
     if not text:
         return ""
     text = text.strip().replace("\n", " ").strip()

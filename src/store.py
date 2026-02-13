@@ -22,6 +22,7 @@ class QARecord:
     chat_id: str
     root_message_id: str
     thread_id: str
+    answerer_open_id: str | None = None
 
 
 _collection: Any = None
@@ -51,6 +52,7 @@ def has_qa_for_root(root_message_id: str) -> bool:
     result = coll.get(where={"root_message_id": root_message_id}, limit=1)
     return bool(result and result.get("ids"))
 
+
 def add_qa(
     question_text: str,
     answer_text: str,
@@ -59,24 +61,27 @@ def add_qa(
     chat_id: str,
     root_message_id: str,
     thread_id: str,
+    answerer_open_id: str | None = None,
 ) -> None:
     """Index one Q&A pair."""
     coll = _get_collection()
     vec = embeddings.embed(question_text)
-    # Chroma expects list of embeddings and list of metadatas; ids must be unique
     id_ = str(uuid.uuid4())
+    meta = {
+        "answer_text": answer_text[:10000],
+        "answerer_name": answerer_name,
+        "answer_time": answer_time.isoformat() if isinstance(answer_time, datetime) else str(answer_time),
+        "chat_id": chat_id,
+        "root_message_id": root_message_id,
+        "thread_id": thread_id,
+    }
+    if answerer_open_id:
+        meta["answerer_open_id"] = answerer_open_id
     coll.add(
         ids=[id_],
         embeddings=[vec],
         documents=[question_text],
-        metadatas=[{
-            "answer_text": answer_text[:10000],
-            "answerer_name": answerer_name,
-            "answer_time": answer_time.isoformat() if isinstance(answer_time, datetime) else str(answer_time),
-            "chat_id": chat_id,
-            "root_message_id": root_message_id,
-            "thread_id": thread_id,
-        }],
+        metadatas=[meta],
     )
 
 
@@ -86,36 +91,31 @@ def find_similar_question(
     top_k: int = 1,
     min_score: float | None = None,
 ) -> QARecord | None:
-    """Return the best matching Q&A if score >= min_score, else None.
-    Tries same-channel first; if no match, falls back to any channel (so seed data works).
-    """
+    """Return the best matching Q&A if score >= min_score, else None."""
     if min_score is None:
         min_score = SIMILARITY_THRESHOLD
     coll = _get_collection()
     n = coll.count()
     if n == 0:
         return None
-    # Try same-channel first; fallback to any channel (seed data has chat_id="seed")
+    results = {"ids": [[]], "metadatas": [[]], "distances": [[]], "documents": [[]]}
     for where_filter in [{"chat_id": chat_id} if chat_id else None, None]:
-        results = coll.query(
+        part = coll.query(
             query_embeddings=[query_embedding],
             n_results=min(top_k, n),
             where=where_filter,
             include=["documents", "metadatas", "distances"],
         )
-        if results["ids"] and results["ids"][0]:
+        if part["ids"] and part["ids"][0]:
+            results = part
             break
     if not results["ids"] or not results["ids"][0]:
         return None
-    # Chroma returns L2 distance; lower is more similar. Convert to similarity-like score:
-    # similarity ≈ 1 - (distance / 2) for normalized embeddings (cosine ~ 1 - L2^2/2)
     dist = results["distances"][0][0]
-    # For normalized L2, distance in [0, 2]. Cosine = 1 - distance^2/2. So score = 1 - distance^2/2.
     score = 1.0 - (dist * dist) / 2.0
     if score < min_score:
         return None
     meta = results["metadatas"][0][0]
-    from datetime import datetime
     try:
         ts = datetime.fromisoformat(meta["answer_time"].replace("Z", "+00:00"))
     except Exception:
@@ -128,4 +128,5 @@ def find_similar_question(
         chat_id=meta["chat_id"],
         root_message_id=meta["root_message_id"],
         thread_id=meta["thread_id"],
+        answerer_open_id=meta.get("answerer_open_id") or None,
     )
