@@ -38,7 +38,7 @@ def handle_message(
         return
     query_embedding = embeddings.embed(message_text)
 
-    if ANSWER_MODE == "llm":
+    if ANSWER_MODE == "llm_summarize":
         _handle_message_llm_summarize(chat_id, message_id, message_text, query_embedding)
     else:
         _handle_message_top_1(chat_id, message_id, query_embedding)
