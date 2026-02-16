@@ -13,6 +13,8 @@ def format_reply(
     answer_time: datetime | str,
     answer_summary: str,
     thread_link: str,
+    *,
+    source_links: list[str] | None = None,
 ) -> str:
     """Build the bot reply as plain text (fallback when post not used)."""
     date_str = _date_str(answer_time)
@@ -23,6 +25,9 @@ def format_reply(
         answer_summary,
         f"View original thread: {thread_link}" if thread_link else "View original thread",
     ]
+    if source_links:
+        lines.append("")
+        lines.append("Sources: " + ", ".join(source_links))
     return "\n".join(lines)
 
 
@@ -31,6 +36,8 @@ def build_post_content(
     answer_summary: str,
     thread_link: str,
     answerer_open_id: str | None,
+    *,
+    source_links: list[str] | None = None,
 ) -> dict:
     """Build Lark post message content (rich text with @mention and link)."""
     date_str = _date_str(answer_time)
@@ -48,4 +55,12 @@ def build_post_content(
     ]
     if thread_link:
         content.append([{"tag": "a", "text": "View original thread", "href": thread_link}])
+    if source_links:
+        source_line = [{"tag": "text", "text": "Sources: "}]
+        for i, href in enumerate(source_links, 1):
+            if i > 1:
+                source_line.append({"tag": "text", "text": ", "})
+            source_line.append({"tag": "a", "text": f"Thread {i}", "href": href})
+        content.append([{"tag": "text", "text": ""}])
+        content.append(source_line)
     return {"zh_cn": {"content": content, "title": ""}, "en_us": {"content": content, "title": ""}}

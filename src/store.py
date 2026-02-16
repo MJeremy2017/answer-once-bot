@@ -85,19 +85,41 @@ def add_qa(
     )
 
 
-def find_similar_question(
+def _dist_to_score(dist: float) -> float:
+    """Convert Chroma L2 distance to a similarity-like score in [0, 1]."""
+    return 1.0 - (dist * dist) / 2.0
+
+
+def _metadata_to_record(meta: dict, document: str) -> QARecord:
+    try:
+        ts = datetime.fromisoformat(meta["answer_time"].replace("Z", "+00:00"))
+    except Exception:
+        ts = meta["answer_time"]
+    return QARecord(
+        question_text=document,
+        answer_text=meta["answer_text"],
+        answerer_name=meta["answerer_name"],
+        answer_time=ts,
+        chat_id=meta["chat_id"],
+        root_message_id=meta["root_message_id"],
+        thread_id=meta["thread_id"],
+        answerer_open_id=meta.get("answerer_open_id") or None,
+    )
+
+
+def find_similar_questions(
     query_embedding: list[float],
     chat_id: str | None = None,
-    top_k: int = 1,
+    top_k: int = 5,
     min_score: float | None = None,
-) -> QARecord | None:
-    """Return the best matching Q&A if score >= min_score, else None."""
+) -> list[tuple[QARecord, float]]:
+    """Return all Q&A records with score >= min_score, up to top_k, (record, score) pairs."""
     if min_score is None:
         min_score = SIMILARITY_THRESHOLD
     coll = _get_collection()
     n = coll.count()
     if n == 0:
-        return None
+        return []
     results = {"ids": [[]], "metadatas": [[]], "distances": [[]], "documents": [[]]}
     for where_filter in [{"chat_id": chat_id} if chat_id else None, None]:
         part = coll.query(
@@ -110,23 +132,49 @@ def find_similar_question(
             results = part
             break
     if not results["ids"] or not results["ids"][0]:
+        return []
+    out: list[tuple[QARecord, float]] = []
+    for i, dist in enumerate(results["distances"][0]):
+        score = _dist_to_score(dist)
+        if score < min_score:
+            continue
+        meta = results["metadatas"][0][i]
+        doc = results["documents"][0][i] if results["documents"][0] else ""
+        out.append((_metadata_to_record(meta, doc), score))
+    return out
+
+
+def pick_best_candidate(
+    candidates: list[tuple[QARecord, float]],
+    policy: str = "similarity",
+) -> QARecord | None:
+    """Pick one QARecord from candidates by policy. Returns None if candidates is empty."""
+    if not candidates:
         return None
-    dist = results["distances"][0][0]
-    score = 1.0 - (dist * dist) / 2.0
-    if score < min_score:
-        return None
-    meta = results["metadatas"][0][0]
-    try:
-        ts = datetime.fromisoformat(meta["answer_time"].replace("Z", "+00:00"))
-    except Exception:
-        ts = meta["answer_time"]
-    return QARecord(
-        question_text=results["documents"][0][0],
-        answer_text=meta["answer_text"],
-        answerer_name=meta["answerer_name"],
-        answer_time=ts,
-        chat_id=meta["chat_id"],
-        root_message_id=meta["root_message_id"],
-        thread_id=meta["thread_id"],
-        answerer_open_id=meta.get("answerer_open_id") or None,
+    if policy == "similarity":
+        return max(candidates, key=lambda x: x[1])[0]
+    if policy == "recency":
+        def _recency_key(item: tuple[QARecord, float]) -> tuple[float, float]:
+            rec, score = item
+            t = rec.answer_time
+            ts = t.timestamp() if isinstance(t, datetime) else 0.0
+            return (ts, score)
+        return max(candidates, key=_recency_key)[0]
+    if policy == "longest":
+        return max(candidates, key=lambda x: (len(x[0].answer_text), x[1]))[0]
+    return candidates[0][0]
+
+
+def find_similar_question(
+    query_embedding: list[float],
+    chat_id: str | None = None,
+    top_k: int = 1,
+    min_score: float | None = None,
+) -> QARecord | None:
+    """Return the best matching Q&A if score >= min_score, else None (backward compatible)."""
+    candidates = find_similar_questions(
+        query_embedding, chat_id=chat_id, top_k=max(1, top_k), min_score=min_score
     )
+    if not candidates:
+        return None
+    return candidates[0][0]

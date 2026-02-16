@@ -8,7 +8,12 @@ from . import store
 from . import formatter
 from . import lark_client
 from . import question_detector
-from .config import ANSWERED_ONCE_CHAT_IDS
+from .config import (
+    ANSWER_MODE,
+    ANSWERED_ONCE_CHAT_IDS,
+    BEST_ANSWER_POLICY,
+    TOP_K_CANDIDATES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +37,15 @@ def handle_message(
         logger.info("handle_message: skip (chat_id not in ANSWERED_ONCE_CHAT_IDS) chat_id=%s", chat_id)
         return
     query_embedding = embeddings.embed(message_text)
+
+    if ANSWER_MODE == "llm":
+        _handle_message_llm_summarize(chat_id, message_id, message_text, query_embedding)
+    else:
+        _handle_message_top_1(chat_id, message_id, query_embedding)
+
+
+def _handle_message_top_1(chat_id: str, message_id: str, query_embedding: list[float]) -> None:
+    """top_1 mode: single best match, no LLM."""
     match = store.find_similar_question(query_embedding, chat_id=chat_id)
     if match:
         thread_link = lark_client.build_thread_link(match.chat_id, match.root_message_id)
@@ -57,6 +71,83 @@ def handle_message(
     else:
         reply_text = DONT_KNOW_REPLY
         sent_id = lark_client.send_text_message(chat_id, reply_text, root_id=message_id)
+    if sent_id:
+        logger.info("Replied to message_id=%s sent_id=%s", message_id, sent_id)
+    else:
+        logger.warning("Failed to send reply for message_id=%s", message_id)
+
+
+def _handle_message_llm_summarize(
+    chat_id: str,
+    message_id: str,
+    message_text: str,
+    query_embedding: list[float],
+) -> None:
+    """llm_summarize mode: top-k candidates, LLM summary, source links."""
+    from . import answer_summarizer
+
+    candidates = store.find_similar_questions(
+        query_embedding,
+        chat_id=chat_id,
+        top_k=TOP_K_CANDIDATES,
+    )
+    if not candidates:
+        sent_id = lark_client.send_text_message(chat_id, DONT_KNOW_REPLY, root_id=message_id)
+    else:
+        try:
+            summary = answer_summarizer.summarize_answer(message_text, candidates)
+        except (ValueError, ImportError) as e:
+            logger.warning("LLM summarization skipped (%s), falling back to top-1", e)
+            best = store.pick_best_candidate(candidates, policy=BEST_ANSWER_POLICY)
+            if best:
+                thread_link = lark_client.build_thread_link(best.chat_id, best.root_message_id)
+                summary = _truncate_summary(best.answer_text, max_chars=500)
+                post_content = formatter.build_post_content(
+                    answer_time=best.answer_time,
+                    answer_summary=summary,
+                    thread_link=thread_link,
+                    answerer_open_id=best.answerer_open_id,
+                )
+                reply_text = formatter.format_reply(
+                    answerer_name=best.answerer_name,
+                    answer_time=best.answer_time,
+                    answer_summary=summary,
+                    thread_link=thread_link,
+                )
+                sent_id = lark_client.send_text_message(
+                    chat_id, reply_text, root_id=message_id, post_content=post_content
+                )
+            else:
+                sent_id = lark_client.send_text_message(chat_id, DONT_KNOW_REPLY, root_id=message_id)
+        except Exception as e:
+            logger.exception("LLM summarization failed: %s", e)
+            sent_id = lark_client.send_text_message(chat_id, DONT_KNOW_REPLY, root_id=message_id)
+        else:
+            source_links = [
+                lark_client.build_thread_link(rec.chat_id, rec.root_message_id)
+                for rec, _ in candidates
+            ]
+            summary_truncated = _truncate_summary(summary, max_chars=500)
+            post_content = formatter.build_post_content(
+                answer_time="various",
+                answer_summary=summary_truncated,
+                thread_link=source_links[0] if source_links else "",
+                answerer_open_id=None,
+                source_links=source_links,
+            )
+            reply_text = formatter.format_reply(
+                answerer_name="Past discussions",
+                answer_time="various",
+                answer_summary=summary_truncated,
+                thread_link=source_links[0] if source_links else "",
+                source_links=source_links,
+            )
+            sent_id = lark_client.send_text_message(
+                chat_id,
+                reply_text,
+                root_id=message_id,
+                post_content=post_content,
+            )
     if sent_id:
         logger.info("Replied to message_id=%s sent_id=%s", message_id, sent_id)
     else:

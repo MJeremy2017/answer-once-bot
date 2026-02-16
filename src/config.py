@@ -20,6 +20,13 @@ def _float(value: str | None, default: float) -> float:
         return default
 
 
+def _int(value: str | None, default: int) -> int:
+    try:
+        return int((value or "").strip()) if value else default
+    except ValueError:
+        return default
+
+
 # Lark
 LARK_APP_ID = _str(os.getenv("LARK_APP_ID"))
 LARK_APP_SECRET = _str(os.getenv("LARK_APP_SECRET"))
@@ -34,6 +41,16 @@ ANSWERED_ONCE_CHAT_IDS: list[str] = [x.strip() for x in _chat_ids.split(",") if 
 
 # Similarity
 SIMILARITY_THRESHOLD = _float(os.getenv("SIMILARITY_THRESHOLD"), 0.78)
+
+# Answer mode: top_1 (single best match) or llm (top-k + LLM summary)
+ANSWER_MODE = _str(os.getenv("ANSWER_MODE")) or "top_1"
+TOP_K_CANDIDATES = max(1, _int(os.getenv("TOP_K_CANDIDATES"), 5))
+BEST_ANSWER_POLICY = _str(os.getenv("BEST_ANSWER_POLICY")) or "similarity"  # similarity | recency | longest
+
+# LLM (for llm_summarize mode)
+OPENAI_API_KEY = _str(os.getenv("OPENAI_API_KEY")) or _str(os.getenv("LLM_API_KEY"))
+LLM_MODEL = _str(os.getenv("LLM_MODEL")) or "gpt-4o-mini"
+LLM_BASE_URL = _str(os.getenv("LLM_BASE_URL"))  # optional, for non-OpenAI endpoints
 
 # Chroma
 CHROMA_PERSIST_DIR = Path(_str(os.getenv("CHROMA_PERSIST_DIR")) or "./data/chroma")
