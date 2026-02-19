@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.config import ANSWERED_ONCE_CHAT_IDS, LARK_APP_ID
 from src.lark_client import list_messages
 from src.question_detector import is_question
-from src.store import add_qa
+from src.store import THREAD_REPLY_DELIMITER, add_qa
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ def backfill_chat(chat_id: str) -> int:
             roots[m.get("message_id") or ""] = m
         else:
             by_root[root_id].append(m)
-    # Sort replies by create_time so we take first reply
+    # Sort replies by create_time; merge all replies into one answer per thread
     for root_id in by_root:
         by_root[root_id].sort(key=lambda x: int(x.get("create_time") or 0))
     count = 0
@@ -55,17 +55,21 @@ def backfill_chat(chat_id: str) -> int:
         replies = by_root.get(root_msg_id, [])
         if not replies:
             continue
-        first_reply = replies[0]
-        answer_text = _parse_content(first_reply.get("content") or "{}")
-        if not answer_text:
+        reply_texts = []
+        for r in replies:
+            t = _parse_content(r.get("content") or "{}")
+            if t:
+                reply_texts.append(t)
+        if not reply_texts:
             continue
-        sender_id = first_reply.get("sender_id") or "unknown"
-        create_time = first_reply.get("create_time") or ""
+        answer_text = THREAD_REPLY_DELIMITER.join(reply_texts)
+        last_reply = replies[-1]
+        sender_id = last_reply.get("sender_id") or "unknown"
+        create_time = last_reply.get("create_time") or ""
         try:
             ts = datetime.utcfromtimestamp(int(create_time) / 1000) if create_time else datetime.utcnow()
         except Exception:
             ts = datetime.utcnow()
-        # Use a display name: we don't fetch user name in MVP; use "User (open_id)" or "Someone"
         answerer_name = f"User ({sender_id[:12]}...)" if len(str(sender_id)) > 12 else f"User ({sender_id})"
         add_qa(
             question_text=content,
@@ -75,9 +79,10 @@ def backfill_chat(chat_id: str) -> int:
             chat_id=chat_id,
             root_message_id=root_msg_id,
             thread_id=root_msg_id,
+            answerer_open_id=sender_id if sender_id != "unknown" else None,
         )
         count += 1
-        logger.info("Indexed Q&A: %s -> %s", content[:50], answer_text[:50])
+        logger.info("Indexed Q&A (thread with %d replies): %s", len(reply_texts), content[:50])
     return count
 
 

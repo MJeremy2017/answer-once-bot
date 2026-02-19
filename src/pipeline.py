@@ -41,25 +41,35 @@ def handle_message(
     if ANSWER_MODE == "llm_summarize":
         _handle_message_llm_summarize(chat_id, message_id, message_text, query_embedding)
     else:
-        _handle_message_top_1(chat_id, message_id, query_embedding)
+        _handle_message_top_1(chat_id, message_id, message_text, query_embedding)
 
 
-def _handle_message_top_1(chat_id: str, message_id: str, query_embedding: list[float]) -> None:
-    """top_1 mode: single best match, no LLM."""
-    match = store.find_similar_question(query_embedding, chat_id=chat_id)
-    if match:
+def _handle_message_top_1(chat_id: str, message_id: str, message_text: str, query_embedding: list[float]) -> None:
+    """top_1 mode: single best match; full thread sent to LLM for summary when possible."""
+    candidates = store.find_similar_questions(
+        query_embedding, chat_id=chat_id, top_k=1
+    )
+    if not candidates:
+        sent_id = lark_client.send_text_message(chat_id, DONT_KNOW_REPLY, root_id=message_id)
+    else:
+        match, _ = candidates[0]
         thread_link = lark_client.build_thread_link(match.chat_id, match.root_message_id)
-        summary = _truncate_summary(match.answer_text, max_chars=500)
+        try:
+            from . import answer_summarizer
+            summary = answer_summarizer.summarize_answer(message_text, candidates)
+        except (ValueError, ImportError) as e:
+            logger.warning("LLM summarization skipped (%s), truncating", e)
+            summary = _truncate_summary(match.answer_text, max_chars=500)
         post_content = formatter.build_post_content(
             answer_time=match.answer_time,
-            answer_summary=summary,
+            answer_summary=_truncate_summary(summary, max_chars=500),
             thread_link=thread_link,
             answerer_open_id=match.answerer_open_id,
         )
         reply_text = formatter.format_reply(
             answerer_name=match.answerer_name,
             answer_time=match.answer_time,
-            answer_summary=summary,
+            answer_summary=_truncate_summary(summary, max_chars=500),
             thread_link=thread_link,
         )
         sent_id = lark_client.send_text_message(
@@ -68,9 +78,6 @@ def _handle_message_top_1(chat_id: str, message_id: str, query_embedding: list[f
             root_id=message_id,
             post_content=post_content,
         )
-    else:
-        reply_text = DONT_KNOW_REPLY
-        sent_id = lark_client.send_text_message(chat_id, reply_text, root_id=message_id)
     if sent_id:
         logger.info("Replied to message_id=%s sent_id=%s", message_id, sent_id)
     else:
@@ -162,12 +169,9 @@ def index_reply(
     reply_sender_id: str,
     reply_create_time: str,
 ) -> None:
-    """When a reply is posted, if the root is a question and not yet indexed, add Q&A to the store."""
+    """When a reply is posted, append it to the Q&A for this root (create if first reply)."""
     if not root_id or not reply_content:
         logger.info("index_reply: skip (no root_id or empty reply) root_id=%s", root_id)
-        return
-    if store.has_qa_for_root(root_id):
-        logger.info("index_reply: skip (already has Q&A for root) root_id=%s", root_id)
         return
     root_msg = lark_client.get_message(root_id)
     if not root_msg:
@@ -186,17 +190,16 @@ def index_reply(
     except (TypeError, ValueError):
         ts = datetime.utcnow()
     answerer_name = f"User ({reply_sender_id[:12]}...)" if len(str(reply_sender_id)) > 12 else f"User ({reply_sender_id})"
-    store.add_qa(
+    store.append_reply_to_qa(
+        chat_id=chat_id,
+        root_id=root_id,
         question_text=question_text,
-        answer_text=answer_text,
+        new_reply_text=answer_text,
         answerer_name=answerer_name,
         answer_time=ts,
-        chat_id=chat_id,
-        root_message_id=root_id,
-        thread_id=root_id,
         answerer_open_id=reply_sender_id or None,
     )
-    logger.info("Indexed Q&A for root_id=%s", root_id)
+    logger.info("Appended reply to Q&A for root_id=%s", root_id)
 
 
 def _parse_content(content: str) -> str:

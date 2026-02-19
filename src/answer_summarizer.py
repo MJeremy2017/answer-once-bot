@@ -9,7 +9,8 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = """You are a helpful assistant that summarizes past Q&A discussions.
 Given a user's question and several relevant Q&A pairs from past discussions, produce a single concise, accurate summary answer.
 Use only information present in the provided Q&A pairs. Do not invent or add information.
-Write in a clear, direct style. Keep the summary brief (a few sentences or a short paragraph)."""
+Write in a clear, direct style. Keep the summary brief (a few sentences or a short paragraph).
+The "Answer" for a pair may be a long thread with multiple replies (e.g. acknowledgments, updates, and a final resolution). Summarize the key outcome or resolution rather than repeating early replies."""
 
 
 def _build_user_prompt(user_question: str, candidates: list[tuple["QARecord", float]]) -> str:

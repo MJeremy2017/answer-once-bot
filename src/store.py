@@ -11,6 +11,7 @@ from . import embeddings
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "answered_once_qa"
+THREAD_REPLY_DELIMITER = "\n---\n"
 
 
 @dataclass
@@ -51,6 +52,68 @@ def has_qa_for_root(root_message_id: str) -> bool:
     coll = _get_collection()
     result = coll.get(where={"root_message_id": root_message_id}, limit=1)
     return bool(result and result.get("ids"))
+
+
+def get_qa_by_root(root_message_id: str) -> QARecord | None:
+    """Return the Q&A record for this thread root, or None."""
+    if not root_message_id:
+        return None
+    coll = _get_collection()
+    result = coll.get(
+        where={"root_message_id": root_message_id},
+        limit=1,
+        include=["metadatas", "documents"],
+    )
+    if not result or not result.get("ids") or not result["ids"][0]:
+        return None
+    meta = result["metadatas"][0][0]
+    doc = (result["documents"][0][0] if result.get("documents") and result["documents"][0] else "")
+    return _metadata_to_record(meta, doc)
+
+
+def delete_by_root(root_message_id: str) -> None:
+    """Remove all Q&A records for this thread root (Chroma has no in-place update)."""
+    if not root_message_id:
+        return
+    coll = _get_collection()
+    coll.delete(where={"root_message_id": root_message_id})
+
+
+def append_reply_to_qa(
+    chat_id: str,
+    root_id: str,
+    question_text: str,
+    new_reply_text: str,
+    answerer_name: str,
+    answer_time: datetime | str,
+    answerer_open_id: str | None = None,
+) -> None:
+    """Append this reply to the Q&A for this root. Creates the record if first reply."""
+    existing = get_qa_by_root(root_id)
+    if existing is None:
+        add_qa(
+            question_text=question_text,
+            answer_text=new_reply_text.strip(),
+            answerer_name=answerer_name,
+            answer_time=answer_time,
+            chat_id=chat_id,
+            root_message_id=root_id,
+            thread_id=root_id,
+            answerer_open_id=answerer_open_id,
+        )
+        return
+    merged = (existing.answer_text.strip() + THREAD_REPLY_DELIMITER + new_reply_text.strip()).strip()
+    delete_by_root(root_id)
+    add_qa(
+        question_text=existing.question_text,
+        answer_text=merged,
+        answerer_name=answerer_name,
+        answer_time=answer_time,
+        chat_id=chat_id,
+        root_message_id=root_id,
+        thread_id=root_id,
+        answerer_open_id=answerer_open_id,
+    )
 
 
 def add_qa(
