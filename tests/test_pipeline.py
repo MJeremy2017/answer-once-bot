@@ -34,7 +34,7 @@ def test_handle_message_skips_empty_text(mock_dependencies) -> None:
         sender_id="ou_1",
     )
     mock_store = mock_dependencies
-    mock_store.find_similar_questions.assert_not_called()
+    mock_store.find_similar_question.assert_not_called()
 
 
 def test_handle_message_skips_non_question(mock_dependencies) -> None:
@@ -48,7 +48,7 @@ def test_handle_message_skips_non_question(mock_dependencies) -> None:
         sender_id="ou_1",
     )
     mock_store = mock_dependencies
-    mock_store.find_similar_questions.assert_not_called()
+    mock_store.find_similar_question.assert_not_called()
 
 
 def test_handle_message_no_match_sends_dont_know(mock_dependencies) -> None:
@@ -73,9 +73,10 @@ def test_handle_message_no_match_sends_dont_know(mock_dependencies) -> None:
     assert kwargs.get("post_content") is None
 
 
-def test_handle_message_with_match_sends_post(mock_dependencies) -> None:
+def test_handle_message_with_match_sends_post(mock_dependencies, monkeypatch) -> None:
     from src.pipeline import formatter, lark_client, question_detector
 
+    monkeypatch.setattr("src.pipeline.ANSWER_MODE", "top_1")
     question_detector.is_question.return_value = True
     mock_store = mock_dependencies
     mock_record = MagicMock(
@@ -88,23 +89,22 @@ def test_handle_message_with_match_sends_post(mock_dependencies) -> None:
         thread_id="om_root",
         answerer_open_id="ou_alice",
     )
-    mock_store.find_similar_questions.return_value = [(mock_record, 0.9)]
-    with patch("src.answer_summarizer.summarize_answer", return_value="Summarized answer"):
-        formatter.build_post_content.return_value = {"post": "content"}
-        formatter.format_reply.return_value = "Plain text fallback"
-        lark_client.send_text_message.return_value = "om_reply"
+    mock_store.find_similar_question.return_value = mock_record
+    formatter.build_post_content.return_value = {"post": "content"}
+    formatter.format_reply.return_value = "Plain text fallback"
+    lark_client.send_text_message.return_value = "om_reply"
 
-        handle_message(
-            chat_id="oc_1",
-            message_id="om_1",
-            message_text="How do I deploy?",
-            sender_id="ou_1",
-        )
+    handle_message(
+        chat_id="oc_1",
+        message_id="om_1",
+        message_text="How do I deploy?",
+        sender_id="ou_1",
+    )
 
     lark_client.send_text_message.assert_called_once()
-    kwargs = lark_client.send_text_message.call_args.kwargs
-    assert kwargs["post_content"] == {"post": "content"}
-    assert kwargs["root_id"] == "om_1"
+    call_kwargs = lark_client.send_text_message.call_args[1]
+    assert call_kwargs["post_content"] == {"post": "content"}
+    assert call_kwargs["root_id"] == "om_1"
 
 
 def test_index_reply_skips_no_root_id(mock_dependencies) -> None:

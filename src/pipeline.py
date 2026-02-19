@@ -41,35 +41,25 @@ def handle_message(
     if ANSWER_MODE == "llm_summarize":
         _handle_message_llm_summarize(chat_id, message_id, message_text, query_embedding)
     else:
-        _handle_message_top_1(chat_id, message_id, message_text, query_embedding)
+        _handle_message_top_1(chat_id, message_id, query_embedding)
 
 
-def _handle_message_top_1(chat_id: str, message_id: str, message_text: str, query_embedding: list[float]) -> None:
-    """top_1 mode: single best match; full thread sent to LLM for summary when possible."""
-    candidates = store.find_similar_questions(
-        query_embedding, chat_id=chat_id, top_k=1
-    )
-    if not candidates:
-        sent_id = lark_client.send_text_message(chat_id, DONT_KNOW_REPLY, root_id=message_id)
-    else:
-        match, _ = candidates[0]
+def _handle_message_top_1(chat_id: str, message_id: str, query_embedding: list[float]) -> None:
+    """top_1 mode: single best match, no LLM; reply is truncated stored answer."""
+    match = store.find_similar_question(query_embedding, chat_id=chat_id)
+    if match:
         thread_link = lark_client.build_thread_link(match.chat_id, match.root_message_id)
-        try:
-            from . import answer_summarizer
-            summary = answer_summarizer.summarize_answer(message_text, candidates)
-        except (ValueError, ImportError) as e:
-            logger.warning("LLM summarization skipped (%s), truncating", e)
-            summary = _truncate_summary(match.answer_text, max_chars=500)
+        summary = _truncate_summary(match.answer_text, max_chars=2000)
         post_content = formatter.build_post_content(
             answer_time=match.answer_time,
-            answer_summary=_truncate_summary(summary, max_chars=500),
+            answer_summary=summary,
             thread_link=thread_link,
             answerer_open_id=match.answerer_open_id,
         )
         reply_text = formatter.format_reply(
             answerer_name=match.answerer_name,
             answer_time=match.answer_time,
-            answer_summary=_truncate_summary(summary, max_chars=500),
+            answer_summary=summary,
             thread_link=thread_link,
         )
         sent_id = lark_client.send_text_message(
@@ -78,6 +68,9 @@ def _handle_message_top_1(chat_id: str, message_id: str, message_text: str, quer
             root_id=message_id,
             post_content=post_content,
         )
+    else:
+        reply_text = DONT_KNOW_REPLY
+        sent_id = lark_client.send_text_message(chat_id, reply_text, root_id=message_id)
     if sent_id:
         logger.info("Replied to message_id=%s sent_id=%s", message_id, sent_id)
     else:
