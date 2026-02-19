@@ -66,8 +66,9 @@ def get_qa_by_root(root_message_id: str) -> QARecord | None:
     )
     if not result or not result.get("ids") or not result["ids"][0]:
         return None
-    meta = result["metadatas"][0][0]
-    doc = (result["documents"][0][0] if result.get("documents") and result["documents"][0] else "")
+    # get() returns flat lists: ids, metadatas, documents are each list of items (one per record)
+    meta = result["metadatas"][0]
+    doc = (result["documents"][0] if result.get("documents") and result["documents"] else "")
     return _metadata_to_record(meta, doc)
 
 
